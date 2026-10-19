@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env*
+!.env.example
+*.tsbuildinfo
+test-results/
+playwright-report/
+.openai/*.tar.gz
+.openai/*.zip
+.sites/
