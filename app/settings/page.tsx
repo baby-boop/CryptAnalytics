@@ -21,6 +21,12 @@ import {
   Zap,
 } from "lucide-react";
 import { useApp } from "@/components/app-provider";
+import { useMarket } from "@/components/market-provider";
+import {
+  defaultStrategy as defaults,
+  validateStrategySettings as validateSettings,
+  type StrategySettings,
+} from "@/lib/strategy";
 import { PageHeading, Panel, Toggle } from "@/components/ui";
 import "../settings-views.css";
 
@@ -36,38 +42,6 @@ type NumericKey =
   | "buyRsiMax"
   | "sellRsiMin"
   | "sellRsiMax";
-interface StrategySettings {
-  emaFast: number;
-  emaSlow: number;
-  macdFast: number;
-  macdSlow: number;
-  macdSignal: number;
-  rsiPeriod: number;
-  buyRsiMin: number;
-  buyRsiMax: number;
-  sellRsiMin: number;
-  sellRsiMax: number;
-  buy: Record<ConditionKey, boolean>;
-  sell: Record<ConditionKey, boolean>;
-  volumeFilter: boolean;
-  trendFilter: boolean;
-}
-const defaults: StrategySettings = {
-  emaFast: 50,
-  emaSlow: 200,
-  macdFast: 12,
-  macdSlow: 26,
-  macdSignal: 9,
-  rsiPeriod: 14,
-  buyRsiMin: 45,
-  buyRsiMax: 70,
-  sellRsiMin: 30,
-  sellRsiMax: 55,
-  buy: { price: true, ema: true, macd: true, rsi: true },
-  sell: { price: true, ema: true, macd: true, rsi: true },
-  volumeFilter: true,
-  trendFilter: false,
-};
 const numericFields: { key: NumericKey; label: string; hint: string }[] = [
   { key: "emaFast", label: "EMA fast period", hint: "Short-term trend" },
   { key: "emaSlow", label: "EMA slow period", hint: "Long-term trend" },
@@ -82,85 +56,10 @@ const numericFields: { key: NumericKey; label: string; hint: string }[] = [
 ];
 const keys: ConditionKey[] = ["price", "ema", "macd", "rsi"];
 
-function validateSettings(settings: StrategySettings): string | null {
-  if (
-    numericFields.some(
-      (field) =>
-        !Number.isInteger(settings[field.key]) ||
-        settings[field.key] < 1 ||
-        settings[field.key] > 500,
-    )
-  )
-    return "Indicator periods must be whole numbers between 1 and 500.";
-  if (
-    settings.emaFast >= settings.emaSlow ||
-    settings.macdFast >= settings.macdSlow
-  )
-    return "Fast periods must be smaller than their corresponding slow periods.";
-  if (
-    (["buy", "sell"] as const).some(
-      (side) => !keys.some((key) => settings[side][key]),
-    )
-  )
-    return "Enable at least one condition for both buy and sell signals.";
-  const ranges = [
-    [settings.buyRsiMin, settings.buyRsiMax],
-    [settings.sellRsiMin, settings.sellRsiMax],
-  ];
-  if (
-    ranges.some(
-      ([minimum, maximum]) =>
-        !Number.isFinite(minimum) ||
-        !Number.isFinite(maximum) ||
-        minimum < 0 ||
-        maximum > 100 ||
-        minimum >= maximum,
-    )
-  )
-    return "Each RSI range must increase from a minimum of 0 to a maximum of 100.";
-  return null;
-}
-
-function readSettings(value: unknown): StrategySettings | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Record<string, unknown>;
-  const numericKeys: NumericKey[] = [
-    ...numericFields.map((field) => field.key),
-    "buyRsiMin",
-    "buyRsiMax",
-    "sellRsiMin",
-    "sellRsiMax",
-  ];
-  if (
-    !numericKeys.every(
-      (key) =>
-        typeof candidate[key] === "number" && Number.isFinite(candidate[key]),
-    )
-  )
-    return null;
-  for (const side of ["buy", "sell"]) {
-    const conditions = candidate[side];
-    if (
-      !conditions ||
-      typeof conditions !== "object" ||
-      !keys.every(
-        (key) =>
-          typeof (conditions as Record<string, unknown>)[key] === "boolean",
-      )
-    )
-      return null;
-  }
-  if (
-    typeof candidate.volumeFilter !== "boolean" ||
-    typeof candidate.trendFilter !== "boolean"
-  )
-    return null;
-  const settings = candidate as unknown as StrategySettings;
-  return validateSettings(settings) === null ? settings : null;
-}
-
 export default function SettingsPage() {
   const { theme, setTheme, timeframe, toast } = useApp();
+  const market = useMarket();
+  const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState<StrategySettings>(defaults);
   const [conditionSide, setConditionSide] = useState<"buy" | "sell">("buy");
   const [tab, setTab] = useState("strategy");
@@ -169,20 +68,8 @@ export default function SettingsPage() {
   const [lastSaved, setLastSaved] = useState("Default configuration");
 
   useEffect(() => {
-    try {
-      const saved = readSettings(
-        JSON.parse(
-          localStorage.getItem("signal-agent-strategy") ?? "null",
-        ) as unknown,
-      );
-      if (saved) {
-        setSettings(saved);
-        setLastSaved("Saved on this device");
-      }
-    } catch {
-      /* Default settings remain available. */
-    }
-  }, []);
+    if (!dirty) setSettings(market.strategy);
+  }, [market.strategy, dirty]);
 
   function updateNumber(key: NumericKey, value: string) {
     setSettings((previous) => ({
@@ -193,7 +80,7 @@ export default function SettingsPage() {
     setError("");
   }
 
-  function save(event: FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     const validationError = validateSettings(settings);
@@ -201,15 +88,20 @@ export default function SettingsPage() {
       setError(validationError);
       return;
     }
+    setSaving(true);
     try {
-      localStorage.setItem("signal-agent-strategy", JSON.stringify(settings));
+      await market.saveStrategy(settings);
       setDirty(false);
-      setLastSaved("Just saved on this device");
-      toast("Demo strategy settings saved on this device.");
-    } catch {
+      setLastSaved("Saved to MongoDB");
+      toast("Strategy saved. Live analysis now uses these parameters.");
+    } catch (error) {
       setError(
-        "Your browser could not save these settings. Allow local storage and try again.",
+        error instanceof Error
+          ? error.message
+          : "Could not save strategy settings.",
       );
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -241,7 +133,7 @@ export default function SettingsPage() {
         description="Fine-tune your strategy. Make every signal count."
         actions={
           <span className="settings-device-tag">
-            <ShieldCheck size={14} /> Local demo preferences
+            <ShieldCheck size={14} /> Server strategy settings
           </span>
         }
       />
@@ -432,9 +324,13 @@ export default function SettingsPage() {
               <div className="settings-toggle-row">
                 <span>
                   <strong>Higher timeframe confirmation</strong>
-                  <p>Only signal when the larger trend agrees.</p>
+                  <p>
+                    Requires additional higher-timeframe confirmation data; not
+                    enabled in this release.
+                  </p>
                 </span>
                 <Toggle
+                  disabled
                   label="Higher timeframe confirmation"
                   checked={settings.trendFilter}
                   onChange={(value) => {
@@ -461,8 +357,12 @@ export default function SettingsPage() {
                 <button type="button" className="btn btn-ghost" onClick={reset}>
                   <RotateCcw size={14} /> Reset to default
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  <Save size={14} /> Save changes
+                <button
+                  type="submit"
+                  disabled={saving || !market.connected}
+                  className="btn btn-primary"
+                >
+                  <Save size={14} /> {saving ? "Saving…" : "Save changes"}
                 </button>
               </div>
             </div>
@@ -510,8 +410,9 @@ export default function SettingsPage() {
             <div className="settings-local-note">
               <ShieldCheck size={17} />
               <p>
-                These settings are stored on this device. Demo charts and
-                signals use sample data and are not recalculated.
+                Strategy settings are stored in MongoDB. Closed-candle signals
+                use the saved parameters; previous signal snapshots keep their
+                strategy version.
               </p>
             </div>
           </aside>
@@ -549,31 +450,46 @@ export default function SettingsPage() {
         <div className="settings-short-section section-gap">
           <Panel
             title="Workspace information"
-            description="A transparent view of the current demo environment."
+            description="Current market and database connection status."
           >
             <div className="settings-system-row">
               <span>
                 <Monitor size={17} /> Application mode
               </span>
-              <strong>Interactive UI demo</strong>
+              <strong>
+                {market.mode === "server"
+                  ? "Binance + MongoDB backend"
+                  : "Browser market feed"}
+              </strong>
             </div>
             <div className="settings-system-row">
               <span>
                 <Clock3 size={17} /> Market data
               </span>
-              <strong>Sample dataset</strong>
+              <strong>
+                {market.status === "live"
+                  ? "Live Binance market data"
+                  : market.status === "rest"
+                    ? "Binance REST snapshot"
+                    : "Waiting for connection"}
+              </strong>
             </div>
             <div className="settings-system-row">
               <span>
                 <ShieldCheck size={17} /> Preference storage
               </span>
-              <strong>This browser only</strong>
+              <strong>
+                {market.connected
+                  ? "MongoDB · server settings"
+                  : "Browser appearance only"}
+              </strong>
             </div>
             <div className="settings-info">
               <CircleHelp size={15} />
               <span>
-                Live exchange data, authentication, and Telegram delivery
-                require a backend connection.
+                {market.mode === "server"
+                  ? "Your backend controls market collection, MongoDB storage, authentication, and optional Telegram delivery."
+                  : "This browser feed reads Binance market data. Server storage, authentication, and Telegram require your backend."}
               </span>
             </div>
           </Panel>

@@ -18,7 +18,8 @@ import {
   PageHeading,
   Panel,
 } from "@/components/ui";
-import { coins, formatChange, history, type HistorySignal } from "@/lib/data";
+import { coins, formatChange, type HistorySignal } from "@/lib/data";
+import { useMarket } from "@/components/market-provider";
 import "../insights.css";
 
 type Horizon = 1 | 3 | 6;
@@ -29,9 +30,6 @@ const periodHours: Record<Period, number> = {
   "7d": 168,
   "30d": 720,
 };
-const latestTimestamp = Math.max(
-  ...history.map((row) => new Date(row.time).getTime()),
-);
 const observed = (row: HistorySignal, horizon: Horizon) =>
   horizon === 1 ? row.result1 : horizon === 3 ? row.result3 : row.result6;
 const average = (values: number[]) =>
@@ -40,17 +38,22 @@ const average = (values: number[]) =>
     : 0;
 
 export default function AnalyticsPage() {
+  const { history, lastUpdate, status, error, refresh, mode } = useMarket();
   const [period, setPeriod] = useState<Period>("7d");
   const [horizon, setHorizon] = useState<Horizon>(3);
   const [chartView, setChartView] = useState<"trend" | "symbols">("trend");
+  const latestTimestamp = lastUpdate ?? (history.length
+    ? Math.max(...history.map((row) => new Date(row.time).getTime()))
+    : null);
   const periodRows = useMemo(
     () =>
       history.filter(
         (row) =>
-          new Date(row.time).getTime() >
-          latestTimestamp - periodHours[period] * 3600000,
+          latestTimestamp !== null &&
+          new Date(row.time).getTime() >= latestTimestamp - periodHours[period] * 3600000 &&
+          new Date(row.time).getTime() <= latestTimestamp,
       ),
-    [period],
+    [history, latestTimestamp, period],
   );
   const evaluated = useMemo(
     () =>
@@ -69,9 +72,7 @@ export default function AnalyticsPage() {
     : 0;
   const buyCount = periodRows.filter((row) => row.signal === "BUY").length;
   const buyRatio = periodRows.length ? (buyCount / periodRows.length) * 100 : 0;
-  const symbolRows = coins
-    .slice(0, 6)
-    .map((coin) => {
+  const symbolRows = coins.map((coin) => {
       const rows = evaluated.filter((row) => row.symbol === coin.symbol);
       return {
         coin,
@@ -94,7 +95,7 @@ export default function AnalyticsPage() {
         .map((row) => row.movement),
     ),
   }));
-  const dateRange = `${new Date(latestTimestamp - periodHours[period] * 3600000).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })} – ${new Date(latestTimestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}`;
+  const dateRange = latestTimestamp === null ? "Waiting for market data" : `${new Date(latestTimestamp - periodHours[period] * 3600000).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })} – ${new Date(latestTimestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}`;
 
   return (
     <div className="insights-page">
@@ -116,6 +117,18 @@ export default function AnalyticsPage() {
           </div>
         }
       />
+      <div className={`archive-feed-note section-gap ${error ? "has-error" : ""}`} role="status">
+        <Info size={15} />
+        <p>
+          {error ?? (status === "loading"
+            ? "Loading recorded signal outcomes…"
+            : mode === "server"
+              ? "Binance candle outcomes from the MongoDB signal archive."
+              : "Historical replay from Binance candles. Backend persistence is unavailable in this preview.")}
+          {(status === "offline" || status === "reconnecting") && history.length > 0 && <span> Showing the last received archive.</span>}
+        </p>
+        {(error || status === "offline") && <button className="btn btn-ghost" onClick={refresh}>Reconnect</button>}
+      </div>
       <div className="analytics-context section-gap">
         <span>
           <span className="insights-calendar-dot" />
@@ -234,8 +247,8 @@ export default function AnalyticsPage() {
           {!evaluated.length ? (
             <EmptyState
               icon={Activity}
-              title="Outcomes are still pending"
-              description="This horizon requires more closed candles before an outcome can be evaluated."
+              title={!periodRows.length ? status === "loading" ? "Loading signal outcomes" : "No signals in this period" : "Outcomes are still pending"}
+              description={!periodRows.length ? "Signals are added when closed Binance candles satisfy your strategy. Choose a longer period to include older signals." : "This horizon requires more closed candles before an outcome can be evaluated."}
             />
           ) : chartView === "trend" ? (
             <MovementChart points={chartPoints} />
@@ -280,7 +293,7 @@ export default function AnalyticsPage() {
           <div
             className="analytics-donut"
             style={{
-              background: `conic-gradient(var(--green, #18d69d) 0% ${buyRatio}%, var(--red, #f56578) ${buyRatio}% 100%)`,
+              background: periodRows.length ? `conic-gradient(var(--green, #18d69d) 0% ${buyRatio}%, var(--red, #f56578) ${buyRatio}% 100%)` : "var(--border, #1c2a3d)",
             }}
           >
             <div>
@@ -306,7 +319,7 @@ export default function AnalyticsPage() {
               </span>
               <strong>
                 {periodRows.length - buyCount}
-                <small>{(100 - buyRatio).toFixed(1)}%</small>
+                <small>{(periodRows.length ? 100 - buyRatio : 0).toFixed(1)}%</small>
               </strong>
             </div>
             <div>
@@ -319,7 +332,7 @@ export default function AnalyticsPage() {
           </div>
           <p className="analytics-distribution-note">
             WAIT states are displayed on the dashboard and excluded from the
-            signal archive.
+            signal archive. Includes {periodRows.filter((row) => row.source === "backfill").length} reconstructed backfill signals and {periodRows.filter((row) => row.source === "live").length} live-close signals.
           </p>
         </Panel>
       </div>
@@ -411,8 +424,9 @@ export default function AnalyticsPage() {
           <div className="analytics-method-note">
             <Info size={14} />
             <span>
-              These demo observations are not trading profit. Fees, slippage,
-              position sizing and execution are not modeled.
+              Outcomes use actual later closed-candle prices and the signal’s
+              original strategy version. Fees, slippage, position sizing and
+              execution are not modeled.
             </span>
           </div>
         </Panel>
@@ -451,6 +465,7 @@ function MovementChart({
     )
     .join(" ");
   const area = `${path} L ${x(points.length - 1)} ${y(0)} L ${x(0)} ${y(0)} Z`;
+  const hoveredPoint = hovered === null ? null : points[hovered];
   return (
     <div className="analytics-chart">
       <svg
@@ -534,11 +549,11 @@ function MovementChart({
             />
           </g>
         ))}
-        {hovered !== null && (
+        {hovered !== null && hoveredPoint && (
           <g>
             <rect
               x={Math.min(width - 150, Math.max(left, x(hovered) - 65))}
-              y={Math.max(0, y(points[hovered].value) - 42)}
+              y={Math.max(0, y(hoveredPoint.value) - 42)}
               width="130"
               height="28"
               rx="6"
@@ -547,11 +562,11 @@ function MovementChart({
             />
             <text
               x={Math.min(width - 150, Math.max(left, x(hovered) - 65)) + 65}
-              y={Math.max(0, y(points[hovered].value) - 42) + 18}
+              y={Math.max(0, y(hoveredPoint.value) - 42) + 18}
               textAnchor="middle"
               className="analytics-tooltip"
             >
-              {formatChange(points[hovered].value)}
+              {formatChange(hoveredPoint.value)}
             </text>
           </g>
         )}

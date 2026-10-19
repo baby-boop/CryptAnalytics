@@ -9,11 +9,8 @@ import {
   Check,
   ChevronRight,
   Clock3,
-  ExternalLink,
-  Filter,
   Layers3,
   ListFilter,
-  MoreHorizontal,
   Plus,
   Radio,
   RefreshCw,
@@ -25,10 +22,11 @@ import {
   Volume2,
   VolumeX,
   X,
-  Zap,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useApp } from "@/components/app-provider";
+import { useMarket } from "@/components/market-provider";
+import { MarketStatus } from "@/components/market-status";
 import {
   CoinIcon,
   EmptyState,
@@ -39,11 +37,8 @@ import {
   Sparkline,
 } from "@/components/ui";
 import {
-  coins,
-  fixtureDate,
   formatChange,
   formatPrice,
-  history,
   timeframes,
   type Signal,
 } from "@/lib/data";
@@ -61,13 +56,14 @@ export default function Dashboard() {
   } = useApp();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Signal | "ALL">("ALL");
-  const [refreshing, setRefreshing] = useState(false);
+  const { markets, history, status, refresh, strategy, symbolErrors } = useMarket();
+  const refreshing = status === "loading";
   const [sort, setSort] = useState<"default" | "change">("default");
   const [showFilters, setShowFilters] = useState(false);
 
   const watched = useMemo(
-    () => coins.filter((c) => watchlist.includes(c.symbol)),
-    [watchlist],
+    () => markets.filter((c) => watchlist.includes(c.symbol)),
+    [watchlist, markets],
   );
   const visible = useMemo(() => {
     const result = watched.filter(
@@ -76,26 +72,18 @@ export default function Dashboard() {
         (filter === "ALL" || c.signal === filter),
     );
     return sort === "change"
-      ? result.sort((a, b) => b.change - a.change)
+      ? result.sort((a, b) => (b.change ?? -Infinity) - (a.change ?? -Infinity))
       : result;
   }, [watched, search, filter, sort]);
   const buys = watched.filter((c) => c.signal === "BUY").length;
   const sells = watched.filter((c) => c.signal === "SELL").length;
   const waiting = watched.filter((c) => c.signal === "WAIT").length;
-  const advancing = watched.filter((c) => c.change > 0).length;
-  const breadth = watched.length
-    ? Math.round((advancing / watched.length) * 100)
-    : 0;
-
-  function refresh() {
-    setRefreshing(true);
-    window.setTimeout(() => {
-      setRefreshing(false);
-      toast(
-        "Demo snapshot reloaded. Connect a backend for live market updates.",
-      );
-    }, 700);
-  }
+  const analyzed = watched.filter((c) => c.signal !== null).length;
+  const priced = watched.filter((c) => c.change !== null);
+  const advancing = priced.filter((c) => c.change! > 0).length;
+  const declining = priced.filter((c) => c.change! < 0).length;
+  const breadth = priced.length ? Math.round((advancing / priced.length) * 100) : null;
+  const recentSignals = history.filter((item) => item.timeframe === timeframe && watchlist.includes(item.symbol)).slice(0, 4);
 
   return (
     <div className="dashboard-page">
@@ -105,10 +93,7 @@ export default function Dashboard() {
         description="Less noise. More clarity. Every signal, in one place."
         actions={
           <>
-            <span className="snapshot-status">
-              <span className="status-dot amber" />
-              Demo snapshot<span>Oct 19, 16:42 UTC</span>
-            </span>
+            <MarketStatus compact />
             <button
               className={`btn refresh-button ${refreshing ? "refreshing" : ""}`}
               onClick={refresh}
@@ -120,24 +105,7 @@ export default function Dashboard() {
           </>
         }
       />
-      <div className="demo-notice">
-        <div>
-          <span className="demo-notice-icon">
-            <Zap size={15} />
-          </span>
-          <span>
-            <strong>A little more signal. A little less guesswork.</strong>
-            <span>
-              {" "}
-              You’re exploring an interactive preview with illustrative data.
-            </span>
-          </span>
-        </div>
-        <Link href="/settings/">
-          Explore your strategy
-          <ArrowRight size={14} />
-        </Link>
-      </div>
+      <MarketStatus />
       <div className="metrics-grid">
         <MetricCard
           label="Tracked assets"
@@ -152,7 +120,7 @@ export default function Dashboard() {
         </MetricCard>
         <MetricCard
           label="Buy signals"
-          value={buys.toString().padStart(2, "0")}
+          value={analyzed ? buys.toString().padStart(2, "0") : "—"}
           icon={TrendingUp}
           tone="green"
         >
@@ -161,12 +129,12 @@ export default function Dashboard() {
             Bullish conditions met
           </span>
           <span className="metric-percent">
-            {watched.length ? Math.round((buys / watched.length) * 100) : 0}%
+            {analyzed ? `${Math.round((buys / analyzed) * 100)}%` : "—"}
           </span>
         </MetricCard>
         <MetricCard
           label="Sell signals"
-          value={sells.toString().padStart(2, "0")}
+          value={analyzed ? sells.toString().padStart(2, "0") : "—"}
           icon={TrendingDown}
           tone="red"
         >
@@ -175,17 +143,17 @@ export default function Dashboard() {
             Bearish conditions met
           </span>
           <span className="metric-percent">
-            {watched.length ? Math.round((sells / watched.length) * 100) : 0}%
+            {analyzed ? `${Math.round((sells / analyzed) * 100)}%` : "—"}
           </span>
         </MetricCard>
         <MetricCard
           label="Awaiting confirmation"
-          value={waiting.toString().padStart(2, "0")}
+          value={analyzed ? waiting.toString().padStart(2, "0") : "—"}
           icon={Clock3}
           tone="purple"
         >
           <span className="metric-caption">
-            Patience is part of the strategy
+            {analyzed} of {watched.length} assets analyzed · {timeframe}
           </span>
         </MetricCard>
       </div>
@@ -239,7 +207,7 @@ export default function Dashboard() {
                 toast(
                   sound
                     ? "Sound preference disabled."
-                    : "Sound preference enabled. Alerts require a connected backend.",
+                    : "Sound preference enabled for incoming live signals.",
                 );
               }}
             >
@@ -302,8 +270,8 @@ export default function Dashboard() {
                       />
                     </button>
                   </th>
-                  <th>7d trend</th>
-                  <th>Signal</th>
+                  <th>{timeframe} close trend</th>
+                  <th>{timeframe} signal</th>
                   <th className="reason-column">Signal reason</th>
                   <th className="alert-cell">
                     <Bell size={13} />
@@ -340,10 +308,10 @@ export default function Dashboard() {
                       {formatPrice(coin.price)}
                     </td>
                     <td
-                      className={`align-right ${coin.change >= 0 ? "positive" : "negative"}`}
+                      className={`align-right ${coin.change === null ? "muted" : coin.change >= 0 ? "positive" : "negative"}`}
                     >
                       <span className="change-value">
-                        {coin.change >= 0 ? (
+                        {coin.change === null ? null : coin.change >= 0 ? (
                           <ArrowUpRight size={13} />
                         ) : (
                           <ArrowDownRight size={13} />
@@ -352,20 +320,20 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td>
-                      <Sparkline
+                      {coin.sparkline.length > 1 ? <Sparkline
                         values={coin.sparkline}
-                        negative={coin.change < 0}
+                        negative={coin.change !== null && coin.change < 0}
                         filled
-                      />
+                      /> : <span className="muted">—</span>}
                     </td>
                     <td>
                       <SignalBadge signal={coin.signal} />
                     </td>
                     <td className="reason-column">
-                      <span className="signal-reason">{coin.reason}</span>
+                      <span className="signal-reason" title={symbolErrors[coin.symbol]}>{symbolErrors[coin.symbol] || coin.reason}</span>
                       <span className="last-signal">
                         <Clock3 size={10} />
-                        {coin.lastSignal}
+                        {coin.lastSignal ? new Date(coin.lastSignal).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC" : "No recent BUY / SELL"}
                       </span>
                     </td>
                     <td className="alert-cell">
@@ -424,7 +392,7 @@ export default function Dashboard() {
             </span>
             <span>
               <span className="status-dot amber" />
-              Illustrative 4h signals
+              Closed-candle {timeframe} signals
               <Link href={`/markets/?symbol=BTC`}>
                 Open {timeframe} chart
                 <ArrowUpRight size={12} />
@@ -443,12 +411,13 @@ export default function Dashboard() {
             </span>
             <div>
               <strong>Every move has a reason.</strong>
-              <p>A look at recent example signals.</p>
+              <p>Real {timeframe} signals on completed candles.</p>
             </div>
           </div>
           <div className="signal-feed">
-            {history.slice(0, 4).map((signal, index) => {
-              const coin = coins.find((c) => c.symbol === signal.symbol)!;
+            {recentSignals.map((signal) => {
+              const coin = markets.find((c) => c.symbol === signal.symbol);
+              if (!coin) return null;
               return (
                 <Link
                   href={`/markets/?symbol=${coin.symbol}`}
@@ -474,13 +443,14 @@ export default function Dashboard() {
                       UTC
                     </span>
                     <span>
-                      4h timeframe
+                      {signal.timeframe} · {signal.source === "live" ? "Live" : "History"}
                       <ArrowUpRight size={11} />
                     </span>
                   </div>
                 </Link>
               );
             })}
+            {!recentSignals.length && <EmptyState icon={Radio} title={refreshing ? "Loading signals" : "No signals in this window"} description={`BUY and SELL signals appear when all ${timeframe} rules pass on a closed candle.`} />}
           </div>
           <Link href="/signals/" className="panel-bottom-link">
             View all signal history
@@ -497,14 +467,13 @@ export default function Dashboard() {
           <div className="momentum-content">
             <div className="momentum-number">
               <span>
-                {breadth}
-                <small>%</small>
+                {breadth ?? "—"}
+                {breadth !== null && <small>%</small>}
               </span>
               <div>
                 <strong>of tracked assets are up</strong>
                 <p>
-                  {advancing} advancing <span>·</span>{" "}
-                  {watched.length - advancing} declining
+                  {priced.length ? `${advancing} advancing · ${declining} declining` : "Waiting for real market prices"}
                 </p>
               </div>
               <span className="momentum-symbol">
@@ -512,7 +481,7 @@ export default function Dashboard() {
               </span>
             </div>
             <div className="breadth-bar">
-              <span style={{ width: `${breadth}%` }} />
+              <span style={{ width: `${breadth ?? 0}%` }} />
               <span />
             </div>
             <div className="breadth-labels">
@@ -526,7 +495,7 @@ export default function Dashboard() {
               </span>
             </div>
             <div className="momentum-foot">
-              <span className="muted">Based on the demo market snapshot</span>
+              <span className="muted">Binance 24h change · {priced.length}/{watched.length} received</span>
               <Link href="/analytics/">
                 Explore performance
                 <ArrowUpRight size={13} />
@@ -551,7 +520,7 @@ export default function Dashboard() {
             <div>
               <span className="strategy-mini blue">∿</span>
               <strong>
-                EMA 50 / 200<small>Trend direction</small>
+                EMA {strategy.emaFast} / {strategy.emaSlow}<small>Trend direction</small>
               </strong>
               <Check size={14} />
             </div>
@@ -567,7 +536,7 @@ export default function Dashboard() {
             <div>
               <span className="strategy-mini orange">≋</span>
               <strong>
-                RSI 14<small>Strength confirmation</small>
+                RSI {strategy.rsiPeriod}<small>Strength confirmation</small>
               </strong>
               <Check size={14} />
             </div>
@@ -578,7 +547,7 @@ export default function Dashboard() {
               Closed candle analysis only
             </span>
             <Link href="/settings/">
-              Strategy v1.0
+              Strategy settings
               <ArrowUpRight size={12} />
             </Link>
           </div>

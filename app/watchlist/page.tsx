@@ -14,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { useApp } from "@/components/app-provider";
+import { useMarket } from "@/components/market-provider";
+import { MarketStatus } from "@/components/market-status";
 import {
   CoinIcon,
   EmptyState,
@@ -23,25 +25,26 @@ import {
   Sparkline,
   Toggle,
 } from "@/components/ui";
-import { coins, formatChange, formatPrice } from "@/lib/data";
+import { formatChange, formatPrice } from "@/lib/data";
 import "../insights.css";
 
 export default function WatchlistPage() {
   const { watchlist, setWatchlist, alerts, setAlerts, toast } = useApp();
+  const { markets, symbolErrors, mode, connected } = useMarket();
   const [search, setSearch] = useState("");
   const [addSearch, setAddSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const [sort, setSort] = useState<"custom" | "change">("custom");
   const modalRef = useRef<HTMLElement>(null);
   const watched = [...new Set(watchlist)].flatMap((symbol) => {
-    const coin = coins.find((item) => item.symbol === symbol);
+    const coin = markets.find((item) => item.symbol === symbol);
     return coin ? [coin] : [];
   });
   const visible = watched.filter((coin) =>
     `${coin.symbol} ${coin.name}`.toLowerCase().includes(search.toLowerCase()),
   );
-  if (sort === "change") visible.sort((a, b) => b.change - a.change);
-  const available = coins.filter(
+  if (sort === "change") visible.sort((a, b) => (b.change ?? -Infinity) - (a.change ?? -Infinity));
+  const available = markets.filter(
     (coin) =>
       !watchlist.includes(coin.symbol) &&
       `${coin.symbol} ${coin.name}`
@@ -85,7 +88,7 @@ export default function WatchlistPage() {
         : alerts.filter((item) => item !== symbol),
     );
     toast(
-      `${symbol} alert preference ${checked ? "enabled" : "disabled"} locally`,
+      `${symbol} alert preference ${checked ? "enabled" : "disabled"}`,
     );
   }
 
@@ -112,6 +115,7 @@ export default function WatchlistPage() {
           </button>
         }
       />
+      <MarketStatus />
       <div className="watchlist-summary section-gap">
         <div>
           <span className="watchlist-summary-symbol">
@@ -129,7 +133,7 @@ export default function WatchlistPage() {
           </span>
           <span>
             <strong>{enabled} alerts enabled</strong>
-            <small className="muted">local notification preferences</small>
+            <small className="muted">notification preferences</small>
           </span>
         </div>
         <div className="watchlist-summary-right">
@@ -153,7 +157,7 @@ export default function WatchlistPage() {
                   : [...new Set([...alerts, ...watchlist])],
               );
               toast(
-                `Watchlist alert preferences ${allEnabled ? "disabled" : "enabled"} locally`,
+                `Watchlist alert preferences ${allEnabled ? "disabled" : "enabled"}`,
               );
             }}
           >
@@ -225,15 +229,15 @@ export default function WatchlistPage() {
                       {formatPrice(coin.price)}
                     </td>
                     <td
-                      className={`numeric ${coin.change >= 0 ? "positive" : "negative"}`}
+                      className={`numeric ${coin.change === null ? "muted" : coin.change >= 0 ? "positive" : "negative"}`}
                     >
                       {formatChange(coin.change)}
                     </td>
                     <td>
-                      <Sparkline
+                      {coin.sparkline.length > 1 ? <Sparkline
                         values={coin.sparkline}
-                        negative={coin.change < 0}
-                      />
+                        negative={coin.change !== null && coin.change < 0}
+                      /> : <span className="muted" title={symbolErrors[coin.symbol]}>—</span>}
                     </td>
                     <td>
                       <SignalBadge signal={coin.signal} />
@@ -289,7 +293,7 @@ export default function WatchlistPage() {
           </span>
           <span className="watchlist-preference-note">
             <span className="history-small-dot buy-dot" />
-            Preferences saved on this device
+            {mode === "server" && connected ? "Preferences sync with your workspace" : "Preferences saved on this device"}
           </span>
         </div>
       </Panel>
@@ -340,7 +344,7 @@ export default function WatchlistPage() {
                 <span className="eyebrow">EXPAND YOUR RADAR</span>
                 <h2 id="add-symbol-title">Add a symbol</h2>
                 <p className="muted">
-                  Choose a pair from the demo Spot catalog.
+                  Choose a supported Binance Spot pair.
                 </p>
               </div>
               <button
@@ -391,7 +395,7 @@ export default function WatchlistPage() {
                   description={
                     addSearch
                       ? "Try another search. Symbols already in your watchlist are hidden."
-                      : "Every symbol in the demo catalog is already in your watchlist."
+                      : "Every supported symbol is already in your watchlist."
                   }
                 />
               )}
@@ -399,7 +403,7 @@ export default function WatchlistPage() {
             <div className="watchlist-modal-foot">
               <CircleHelp size={14} />
               <span>
-                Market data and signal values are illustrative fixtures.
+                Prices come from Binance Spot. Signals use completed candles.
               </span>
             </div>
           </section>

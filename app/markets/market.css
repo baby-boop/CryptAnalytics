@@ -411,6 +411,10 @@
 .market-signal-card dd {
   margin: 0;
   font-weight: 500;
+  max-width: 155px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .market-condition-count {
   color: #10cf9b;

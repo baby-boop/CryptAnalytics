@@ -24,11 +24,11 @@ import {
   SignalBadge,
 } from "@/components/ui";
 import { useApp } from "@/components/app-provider";
+import { useMarket } from "@/components/market-provider";
 import {
   coins,
   formatChange,
   formatPrice,
-  history,
   type HistorySignal,
 } from "@/lib/data";
 import "../insights.css";
@@ -53,12 +53,13 @@ const formatTime = (time: string) =>
 
 export default function SignalsPage() {
   const { toast } = useApp();
+  const { history, status, lastUpdate, error, refresh, mode } = useMarket();
   const [symbol, setSymbol] = useState("all");
   const [timeframe, setTimeframe] = useState("all");
   const [signal, setSignal] = useState("all");
   const [query, setQuery] = useState("");
-  const [from, setFrom] = useState("2026-10-13");
-  const [until, setUntil] = useState("2026-10-19");
+  const [from, setFrom] = useState("");
+  const [until, setUntil] = useState("");
   const [horizon, setHorizon] = useState<Horizon>(3);
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -76,10 +77,14 @@ export default function SignalsPage() {
             .toLowerCase()
             .includes(query.toLowerCase()),
       ),
-    [symbol, timeframe, signal, from, until, query],
+    [history, symbol, timeframe, signal, from, until, query],
   );
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pages);
+  const visiblePages = Array.from(
+    { length: Math.min(5, pages) },
+    (_, index) => Math.max(1, Math.min(currentPage - 2, pages - 4)) + index,
+  );
   const rows = filtered.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
@@ -93,16 +98,16 @@ export default function SignalsPage() {
     timeframe !== "all" ||
     signal !== "all" ||
     query !== "" ||
-    from !== "2026-10-13" ||
-    until !== "2026-10-19";
+    from !== "" ||
+    until !== "";
 
   function resetFilters() {
     setSymbol("all");
     setTimeframe("all");
     setSignal("all");
     setQuery("");
-    setFrom("2026-10-13");
-    setUntil("2026-10-19");
+    setFrom("");
+    setUntil("");
     setPage(1);
   }
 
@@ -117,7 +122,17 @@ export default function SignalsPage() {
       row.price,
       row.rsi,
       resultAt(row, horizon),
+      row.result1,
+      row.result3,
+      row.result6,
       row.reason,
+      row.source,
+      row.strategyVersion,
+      row.emaFast,
+      row.emaSlow,
+      row.macd,
+      row.macdSignal,
+      row.histogram,
     ]);
     const csv = [
       [
@@ -128,7 +143,17 @@ export default function SignalsPage() {
         "Close price (USDT)",
         "RSI",
         `Price change after ${horizon} candles (%)`,
+        "Price change after 1 candle (%)",
+        "Price change after 3 candles (%)",
+        "Price change after 6 candles (%)",
         "Reason",
+        "Source",
+        "Strategy version",
+        "EMA fast",
+        "EMA slow",
+        "MACD",
+        "MACD signal",
+        "MACD histogram",
       ],
       ...values,
     ]
@@ -139,10 +164,10 @@ export default function SignalsPage() {
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = "signal-history-demo.csv";
+    link.download = "signal-history.csv";
     link.click();
     URL.revokeObjectURL(url);
-    toast(`${filtered.length} demo signals exported as CSV`);
+    toast(`${filtered.length} signals exported as CSV`);
   }
 
   return (
@@ -161,6 +186,19 @@ export default function SignalsPage() {
           </button>
         }
       />
+      <div className={`archive-feed-note section-gap ${error ? "has-error" : ""}`} role="status">
+        <Info size={15} />
+        <p>
+          {error ?? (status === "loading"
+            ? "Loading the signal archive…"
+            : mode === "server"
+              ? "MongoDB archive · Binance closed candles."
+              : "Binance historical replay · connect your backend to persist the archive.")}
+          {lastUpdate !== null && <span> Latest market update: {new Date(lastUpdate).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })} UTC.</span>}
+          {(status === "offline" || status === "reconnecting") && history.length > 0 && <span> Showing the last received archive.</span>}
+        </p>
+        {(error || status === "offline") && <button className="btn btn-ghost" onClick={refresh}>Reconnect</button>}
+      </div>
       <div className="history-overview section-gap">
         <div className="history-summary">
           <span className="history-summary-icon">
@@ -238,9 +276,7 @@ export default function SignalsPage() {
               }}
               options={[
                 { value: "all", label: "All symbols" },
-                ...coins
-                  .slice(0, 6)
-                  .map((coin) => ({
+                ...coins.map((coin) => ({
                     value: coin.symbol,
                     label: `${coin.symbol} / USDT`,
                   })),
@@ -343,7 +379,7 @@ export default function SignalsPage() {
                 {rows.map((row) => {
                   const coin = coins.find(
                     (item) => item.symbol === row.symbol,
-                  )!;
+                  ) ?? { ...coins[0], symbol: row.symbol, name: row.symbol };
                   const result = resultAt(row, horizon);
                   const open = expanded === row.id;
                   return (
@@ -364,12 +400,12 @@ export default function SignalsPage() {
         ) : (
           <EmptyState
             icon={Filter}
-            title="No matching signals"
-            description="Try another symbol, timeframe, or date range to explore the archive."
+            title={status === "loading" && !history.length ? "Loading signal archive" : hasFilters ? "No matching signals" : "No signals recorded yet"}
+            description={hasFilters ? "Try another symbol, timeframe, or date range to explore the archive." : "BUY and SELL signals appear after a fully closed Binance candle satisfies your saved strategy."}
             action={
-              <button className="btn btn-ghost" onClick={resetFilters}>
+              hasFilters ? <button className="btn btn-ghost" onClick={resetFilters}>
                 Clear filters
-              </button>
+              </button> : undefined
             }
           />
         )}
@@ -387,7 +423,7 @@ export default function SignalsPage() {
             >
               <ChevronLeft size={15} />
             </button>
-            {Array.from({ length: pages }, (_, index) => index + 1).map(
+            {visiblePages.map(
               (value) => (
                 <button
                   key={value}
@@ -416,6 +452,9 @@ export default function SignalsPage() {
           Results show the observed close-price change after the selected number
           of candles. Positive means the price rose; negative means it fell.
           These are historical observations, not trading returns.
+          Backfill marks signals reconstructed from Binance candle history;
+          live marks signals observed when a candle closed. Each signal keeps
+          its original strategy version and indicator values.
         </p>
       </div>
     </div>
@@ -492,9 +531,13 @@ function SignalRows({
                   {row.symbol}/USDT · {row.signal}
                 </h3>
                 <p>
-                  {row.reason}. This fixture was recorded on a closed{" "}
+                  {row.reason}. Recorded on a closed{" "}
                   {row.timeframe} candle with RSI at {row.rsi.toFixed(1)}.
                 </p>
+                <div className="signal-provenance">
+                  <span className={`signal-source ${row.source}`}>{row.source === "live" ? "Live close" : "Historical backfill"}</span>
+                  <span className="muted">Strategy {row.strategyVersion}</span>
+                </div>
               </div>
               <div className="history-detail-stat">
                 <span className="muted">Closed candle</span>
@@ -517,8 +560,9 @@ function SignalRows({
               <div className="history-detail-note">
                 <Info size={16} />
                 <p>
-                  Demo archive. Indicator snapshots and strategy versions will
-                  accompany signals when a backend is connected.
+                  EMA fast {formatPrice(row.emaFast)} · EMA slow {formatPrice(row.emaSlow)}<br />
+                  MACD {row.macd.toFixed(5)} · Signal {row.macdSignal.toFixed(5)} · Histogram {row.histogram.toFixed(5)}<br />
+                  These values and the signal reason are preserved with the recorded strategy version.
                 </p>
               </div>
             </div>

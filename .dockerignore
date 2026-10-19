@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+.git
+.env*
+!.env.example
+.sites
+.openai
+test-results
+playwright-report
+.codex
+.agents
+.aws
+*.tsbuildinfo

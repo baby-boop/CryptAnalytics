@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowDownLeft,
@@ -15,15 +15,19 @@ import {
   Eye,
   Info,
   Minus,
+  Radio,
+  RefreshCw,
   SlidersHorizontal,
   Star,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
 import { useApp } from "@/components/app-provider";
-import { CoinIcon, Panel, SignalBadge } from "@/components/ui";
-import { createMarketFixture, MarketChart } from "@/components/market-chart";
-import { coins, formatChange, formatPrice, timeframes } from "@/lib/data";
+import { useMarket } from "@/components/market-provider";
+import { MarketStatus } from "@/components/market-status";
+import { CoinIcon, EmptyState, Panel, SignalBadge } from "@/components/ui";
+import { MarketChart } from "@/components/market-chart";
+import { formatChange, formatPrice, timeframes } from "@/lib/data";
 import "./market.css";
 
 export default function MarketPage() {
@@ -37,6 +41,7 @@ export default function MarketPage() {
     setAlerts,
     toast,
   } = useApp();
+  const { markets, analyses, status, symbolErrors, setActiveSymbol, strategy, refresh } = useMarket();
   const [symbol, setSymbol] = useState("BTC");
   const [showEma, setShowEma] = useState(true);
   const [showMacd, setShowMacd] = useState(true);
@@ -48,31 +53,22 @@ export default function MarketPage() {
   );
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("symbol");
-    if (requested && coins.some((coin) => coin.symbol === requested))
+    if (requested && markets.some((coin) => coin.symbol === requested))
       setSymbol(requested);
+    // Only resolve the initial query. Ticker updates must preserve the selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const coin = coins.find((item) => item.symbol === symbol) ?? coins[0];
-  const fixture = useMemo(
-    () => createMarketFixture(coin, timeframe),
-    [coin, timeframe],
-  );
+  useEffect(() => { setActiveSymbol(symbol); }, [symbol, setActiveSymbol]);
+  const coin = markets.find((item) => item.symbol === symbol) ?? markets[0];
+  const analysis = analyses[symbol];
   const watched = watchlist.includes(symbol);
   const alerted = alerts.includes(symbol);
-  const recent = fixture.candles.slice(-3).reverse();
-  const lastCandle = fixture.candles[fixture.candles.length - 1];
-  const periodCandles = fixture.candles.slice(
-    -Math.max(
-      1,
-      Math.round(
-        86400 / { "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 }[timeframe],
-      ),
-    ),
-  );
-  const high = Math.max(...periodCandles.map((item) => item.high));
-  const low = Math.min(...periodCandles.map((item) => item.low));
+  const recent = analysis?.candles.filter((candle) => candle.closed).slice(-3).reverse() ?? [];
+  const lastCandle = analysis?.candles.at(-1);
+  const closedCandle = analysis?.closedCandle;
   const conditionSide =
-    checklistSide ?? (fixture.signal === "SELL" ? "SELL" : "BUY");
-  const conditions = fixture.conditions[conditionSide];
+    checklistSide ?? (analysis?.signal === "SELL" ? "SELL" : "BUY");
+  const conditions = analysis?.conditions[conditionSide] ?? [];
   const passedCount = conditions.filter((condition) => condition.passed).length;
   const changeCoin = (value: string) => {
     setSymbol(value);
@@ -138,7 +134,7 @@ export default function MarketPage() {
               value={symbol}
               onChange={(event) => changeCoin(event.target.value)}
             >
-              {coins.map((item) => (
+              {markets.map((item) => (
                 <option value={item.symbol} key={item.symbol}>
                   {item.symbol} / USDT
                 </option>
@@ -156,8 +152,8 @@ export default function MarketPage() {
               );
               toast(
                 alerted
-                  ? `${symbol} demo alert disabled`
-                  : `${symbol} demo alert saved`,
+                  ? `${symbol} alert disabled`
+                  : `${symbol} alert preference saved`,
               );
             }}
           >
@@ -175,37 +171,38 @@ export default function MarketPage() {
       </div>
       <div className="market-price-strip">
         <div className="market-current-price">
-          <strong>${formatPrice(lastCandle.close)}</strong>
-          <span className={coin.change >= 0 ? "positive" : "negative"}>
-            {coin.change >= 0 ? (
+          <strong>{coin.price === null ? "—" : `$${formatPrice(coin.price)}`}</strong>
+          <span className={coin.change === null ? "muted" : coin.change >= 0 ? "positive" : "negative"}>
+            {coin.change === null ? null : coin.change >= 0 ? (
               <TrendingUp size={15} />
             ) : (
               <TrendingDown size={15} />
             )}
             {formatChange(coin.change)}
-            <small>illustrative 24h</small>
+            <small>24h change</small>
           </span>
         </div>
         <div className="market-stat">
-          <span>Fixture 24h high</span>
-          <strong>${formatPrice(high)}</strong>
+          <span>24h high</span>
+          <strong>{formatPrice(coin.high)}</strong>
         </div>
         <div className="market-stat">
-          <span>Fixture 24h low</span>
-          <strong>${formatPrice(low)}</strong>
+          <span>24h low</span>
+          <strong>{formatPrice(coin.low)}</strong>
         </div>
         <div className="market-stat">
-          <span>Illustrative volume</span>
-          <strong>${coin.volume}</strong>
+          <span>24h volume · USDT</span>
+          <strong>{coin.volume ?? "—"}</strong>
         </div>
         <div className="market-stat market-data-status">
-          <span className="market-fixture-dot" />
+          <span className={`status-dot ${status === "live" ? "" : "amber"}`} />
           <div>
-            <strong>Demo market</strong>
-            <span>No live exchange connection</span>
+            <strong>Binance Spot</strong>
+            <span>{status === "live" ? "Live exchange stream" : status === "loading" ? "Connecting to exchange" : "Stream reconnecting"}</span>
           </div>
         </div>
       </div>
+      <MarketStatus symbol={symbol} />
       <div className={`market-workspace ${expanded ? "market-expanded" : ""}`}>
         <Panel className="market-chart-panel">
           <div className="market-chart-toolbar">
@@ -244,22 +241,22 @@ export default function MarketPage() {
               <strong>{symbol} / USDT</strong> · {timeframe}
             </span>
             <span>
-              O <b>{formatPrice(lastCandle.open)}</b>
+              O <b>{formatPrice(lastCandle?.open)}</b>
             </span>
             <span>
-              H <b>{formatPrice(lastCandle.high)}</b>
+              H <b>{formatPrice(lastCandle?.high)}</b>
             </span>
             <span>
-              L <b>{formatPrice(lastCandle.low)}</b>
+              L <b>{formatPrice(lastCandle?.low)}</b>
             </span>
             <span>
               C{" "}
               <b
                 className={
-                  lastCandle.close >= lastCandle.open ? "positive" : "negative"
+                  !lastCandle ? "muted" : lastCandle.close >= lastCandle.open ? "positive" : "negative"
                 }
               >
-                {formatPrice(lastCandle.close)}
+                {formatPrice(lastCandle?.close)}
               </b>
             </span>
           </div>
@@ -270,13 +267,13 @@ export default function MarketPage() {
               aria-pressed={showEma}
             >
               <Eye size={12} />
-              <span className="ema-fast">EMA 50</span>
+              <span className="ema-fast">EMA {strategy.emaFast}</span>
               <b className="ema-fast">
-                {formatPrice(fixture.ema50.at(-1)?.value ?? 0)}
+                {formatPrice(analysis?.ema50.at(-1)?.value)}
               </b>
-              <span className="ema-slow">EMA 200</span>
+              <span className="ema-slow">EMA {strategy.emaSlow}</span>
               <b className="ema-slow">
-                {formatPrice(fixture.ema200.at(-1)?.value ?? 0)}
+                {formatPrice(analysis?.ema200.at(-1)?.value)}
               </b>
             </button>
             <button
@@ -294,45 +291,47 @@ export default function MarketPage() {
               RSI
             </button>
           </div>
-          <MarketChart
-            fixture={fixture}
+          {analysis?.candles.length ? <MarketChart
+            analysis={analysis}
+            datasetKey={`${symbol}:${timeframe}`}
+            strategy={strategy}
             theme={theme}
             showEma={showEma}
             showMacd={showMacd}
             showRsi={showRsi}
             resetKey={resetKey}
-          />
+          /> : <EmptyState icon={status === "loading" ? Radio : RefreshCw} title={status === "loading" ? "Loading candle history" : "Candle data unavailable"} description={symbolErrors[symbol] || `Waiting for Binance ${symbol}/USDT ${timeframe} candles.`} action={<button className="btn btn-primary" onClick={refresh} disabled={status === "loading"}>Retry</button>} />}
           <div className="market-chart-footer">
             <span>
               <Info size={12} />
-              Deterministic OHLC fixture · Indicators calculated locally
+              Binance OHLCV · Live candle in progress · Indicators use closed candles
             </span>
             <span>Scroll to zoom · Drag to pan</span>
           </div>
         </Panel>
         <aside className="market-sidebar">
           <Panel
-            className={`market-signal-card signal-${fixture.signal.toLowerCase()}`}
+            className={`market-signal-card signal-${analysis?.signal?.toLowerCase() ?? "wait"}`}
           >
             <div className="market-card-label">
-              <span>Current fixture signal</span>
+              <span>Last closed-candle signal</span>
               <span className="market-small-dot" />
             </div>
             <div className="market-signal-value">
-              {fixture.signal === "BUY" ? (
+              {analysis?.signal === "BUY" ? (
                 <TrendingUp />
-              ) : fixture.signal === "SELL" ? (
+              ) : analysis?.signal === "SELL" ? (
                 <TrendingDown />
               ) : (
                 <Minus />
               )}
-              {fixture.signal}
+              {analysis?.signal ?? "—"}
               <span>
-                {fixture.signal === "BUY"
+                {analysis?.signal === "BUY"
                   ? "Bullish setup"
-                  : fixture.signal === "SELL"
+                  : analysis?.signal === "SELL"
                     ? "Bearish setup"
-                    : "Awaiting confirmation"}
+                    : analysis?.signal === "WAIT" ? "Awaiting confirmation" : "Waiting for complete candle data"}
               </span>
             </div>
             <div className="market-signal-divider" />
@@ -344,7 +343,7 @@ export default function MarketPage() {
               <div>
                 <dt>Candle close</dt>
                 <dd>
-                  {new Date(Number(lastCandle.time) * 1000).toLocaleString(
+                  {closedCandle ? new Date(closedCandle.closeTime).toLocaleString(
                     "en-GB",
                     {
                       day: "2-digit",
@@ -353,25 +352,24 @@ export default function MarketPage() {
                       minute: "2-digit",
                       timeZone: "UTC",
                     },
-                  )}{" "}
-                  UTC
+                  ) + " UTC" : "—"}
                 </dd>
               </div>
               <div>
                 <dt>Close price</dt>
-                <dd>${formatPrice(lastCandle.close)}</dd>
+                <dd>{formatPrice(closedCandle?.close)}</dd>
               </div>
               <div>
                 <dt>Strategy</dt>
-                <dd>Default v1</dd>
+                <dd title={analysis?.strategyVersion}>{analysis?.strategyVersion ?? "—"}</dd>
               </div>
             </dl>
           </Panel>
           <Panel className="market-conditions-card">
             <div className="market-card-label">
-              <span>Default {conditionSide} rules</span>
+              <span>{conditionSide} rules</span>
               <span className="market-condition-count">
-                {passedCount} / {conditions.length}
+                {conditions.length ? `${passedCount} / ${conditions.length}` : "—"}
               </span>
             </div>
             <div className="market-checklist-tabs">
@@ -390,7 +388,7 @@ export default function MarketPage() {
             </div>
             <div className="market-condition-progress">
               <span
-                style={{ width: `${(passedCount / conditions.length) * 100}%` }}
+                style={{ width: `${conditions.length ? (passedCount / conditions.length) * 100 : 0}%` }}
               />
             </div>
             <div className="market-conditions">
@@ -413,6 +411,7 @@ export default function MarketPage() {
                   </div>
                 </div>
               ))}
+              {!conditions.length && <p className="muted">Waiting for closed-candle indicators.</p>}
             </div>
           </Panel>
           <Panel className="market-reason-card">
@@ -421,17 +420,12 @@ export default function MarketPage() {
               <CircleHelp size={15} />
             </div>
             <p>
-              {fixture.signal === "BUY"
-                ? "The closed price and EMAs align with a bullish crossover between the previous and current closed candles. RSI is within the default 45–70 range."
-                : fixture.signal === "SELL"
-                  ? "The closed price and EMAs align with a bearish crossover between the previous and current closed candles. RSI is within the default 30–55 range."
-                  : "Neither the complete BUY rule set nor the complete SELL rule set is met on this closed candle. A MACD line already above or below its signal is not a new crossover."}
+              {analysis?.reason ?? "Load completed candles to evaluate your strategy against real market data."}
             </p>
             <div className="market-reason-note">
               <Info size={14} />
               <span>
-                Default v1 rules on closed demo candles. Chart markers use these
-                same rules; saved settings are demo preferences.
+                Signals and chart markers use your saved strategy on completed Binance candles. The current open candle never triggers a signal.
               </span>
             </div>
             <Link href="/settings">
@@ -443,7 +437,7 @@ export default function MarketPage() {
       </div>
       <Panel
         className="market-recent-signals"
-        title="Recent fixture candles"
+        title="Recent closed candles"
         description={`Latest ${timeframe} closes for ${symbol} / USDT`}
         actions={
           <Link href="/signals" className="market-text-link">
@@ -460,14 +454,14 @@ export default function MarketPage() {
                 <th>Timeframe</th>
                 <th>Close price</th>
                 <th>Candle move</th>
-                <th>Fixture signal</th>
+                <th>Closed-candle signal</th>
               </tr>
             </thead>
             <tbody>
-              {recent.map((candle, index) => (
+              {recent.map((candle) => (
                 <tr key={Number(candle.time)}>
                   <td>
-                    {new Date(Number(candle.time) * 1000).toLocaleString(
+                    {new Date(candle.closeTime).toLocaleString(
                       "en-GB",
                       {
                         day: "2-digit",
@@ -497,12 +491,13 @@ export default function MarketPage() {
                   <td>
                     <SignalBadge
                       signal={
-                        fixture.signals[fixture.candles.length - 1 - index]
+                        analysis?.signals[analysis.candles.findIndex((item) => item.time === candle.time)] ?? null
                       }
                     />
                   </td>
                 </tr>
               ))}
+              {!recent.length && <tr><td colSpan={6} className="muted">No closed candles received yet.</td></tr>}
             </tbody>
           </table>
         </div>

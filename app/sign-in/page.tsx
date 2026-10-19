@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   ArrowRight,
@@ -15,34 +16,51 @@ import {
   UserRound,
 } from "lucide-react";
 import { Brand } from "@/components/app-shell";
+import { useMarket } from "@/components/market-provider";
+import { apiRequest } from "@/lib/api";
+import { formatPrice } from "@/lib/data";
 import "../settings-views.css";
 
 export default function SignInPage() {
+  const router = useRouter();
+  const { refresh, markets } = useMarket();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [session, setSession] = useState<{ authRequired: boolean; authenticated: boolean } | null>(null);
+  const btc = markets.find(coin => coin.symbol === "BTC");
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    const controller = new AbortController();
+    void apiRequest<{ authRequired: boolean; authenticated: boolean }>("/session", { signal: controller.signal }).then(value => {
+      if (!controller.signal.aborted) setSession(value);
+    }).catch(error => {
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Could not connect to the authentication server.");
+    });
+    return () => controller.abort();
+  }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    if (username.trim().length < 3) {
-      setError("Enter a username with at least 3 characters.");
+    if (!username.trim()) {
+      setError("Enter your username.");
       return;
     }
-    if (password.length < 8) {
-      setError("Enter a password with at least 8 characters.");
+    if (!password) {
+      setError("Enter your password.");
       return;
     }
     setSubmitting(true);
-    window.setTimeout(() => {
-      setSubmitting(false);
-      setError(
-        "Authentication is not connected in this UI demo. Choose “Explore the demo” to open the workspace.",
-      );
-    }, 600);
+    try {
+      const response = await apiRequest<{ authenticated: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ username: username.trim(), password, remember }) });
+      if (!response.authenticated) throw new Error("The server did not authenticate this session.");
+      setPassword(""); refresh(); router.push("/"); router.refresh();
+    } catch (error) { setError(error instanceof Error ? error.message : "Sign-in failed. Check your backend connection."); }
+    finally { setSubmitting(false); }
   }
 
   return (
@@ -141,10 +159,10 @@ export default function SignInPage() {
             <strong>
               BTC / USDT <span>4H</span>
             </strong>
-            <p>EMA bullish · MACD confirmed</p>
+            <p>Binance Spot · {formatPrice(btc?.price)} USDT</p>
           </div>
           <span className="signin-signal-tag">
-            <Check size={11} /> BUY
+            <Check size={11} /> {btc?.signal ?? "—"}
           </span>
         </div>
         <div className="signin-hero-footer">
@@ -156,9 +174,9 @@ export default function SignInPage() {
       </section>
       <section className="signin-form-section">
         <div className="signin-form-top">
-          <span>New here?</span>
+          <span>Your signal dashboard</span>
           <Link href="/">
-            Explore the demo <ArrowRight size={13} />
+            Open workspace <ArrowRight size={13} />
           </Link>
         </div>
         <div className="signin-form-wrap">
@@ -170,7 +188,8 @@ export default function SignInPage() {
           <p className="signin-intro">
             Sign in to turn market noise into your next move.
           </p>
-          <form onSubmit={submit} noValidate>
+          {session && !session.authRequired && <div className="settings-info" role="status"><ShieldCheck size={16} /><span>Authentication is disabled for this local workspace. Open the workspace to continue.</span></div>}
+          {(!session || session.authRequired) && <form onSubmit={submit} noValidate>
             <label className="signin-field">
               <span>Username</span>
               <div>
@@ -184,7 +203,7 @@ export default function SignInPage() {
                   name="username"
                   autoComplete="username"
                   placeholder="Enter your username"
-                  minLength={3}
+                  maxLength={100}
                   required
                 />
               </div>
@@ -203,7 +222,7 @@ export default function SignInPage() {
                   type={visible ? "text" : "password"}
                   autoComplete="current-password"
                   placeholder="Enter your password"
-                  minLength={8}
+                  maxLength={256}
                   required
                 />
                 <button
@@ -224,7 +243,7 @@ export default function SignInPage() {
                 />{" "}
                 Remember me
               </label>
-              <span className="signin-demo-label">Demo environment</span>
+              <span className="signin-demo-label">Secure server session</span>
             </div>
             {error && (
               <div className="signin-error" role="alert">
@@ -239,21 +258,22 @@ export default function SignInPage() {
               {submitting ? "Checking connection…" : "Sign in"}
               <ArrowRight size={16} />
             </button>
-          </form>
+          </form>}
+          {error && session && !session.authRequired && <div className="signin-error" role="alert">{error}</div>}
           <div className="signin-divider">
             <span />
-            or take a look around
+            your market workspace
             <span />
           </div>
           <Link href="/" className="signin-demo-button">
-            <Sparkles size={16} /> Explore the demo <ArrowRight size={15} />
+            <Sparkles size={16} /> Open workspace <ArrowRight size={15} />
           </Link>
           <div className="signin-security-note">
             <ShieldCheck size={16} />
             <span>
-              Preview the workspace with sample data.
+              {session?.authRequired ? "Sign in with your configured administrator account." : session ? "Your local backend is available." : "Connect your backend to check authentication."}
               <br />
-              No account required for the demo.
+              Credentials are verified by the server.
             </span>
           </div>
         </div>

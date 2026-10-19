@@ -7,7 +7,8 @@ import {
 import type { ReactNode } from "react";
 import type { Coin, Signal } from "@/lib/data";
 
-export function SignalBadge({ signal }: { signal: Signal }) {
+export function SignalBadge({ signal }: { signal: Signal | null }) {
+  if (!signal) return <span className="signal-badge wait">—</span>;
   return (
     <span className={`signal-badge ${signal.toLowerCase()}`}>
       <span />
@@ -46,6 +47,12 @@ export function Sparkline({
   negative?: boolean;
   filled?: boolean;
 }) {
+  if (values.length < 2)
+    return (
+      <span className="muted" aria-label="Price trend is loading">
+        —
+      </span>
+    );
   const min = Math.min(...values) - 3;
   const max = Math.max(...values) + 3;
   const points = values

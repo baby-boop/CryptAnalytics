@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useApp } from "./app-provider";
+import { useMarket } from "./market-provider";
 
 const navigation = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -62,6 +63,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme, watchlist, toast } = useApp();
+  const market = useMarket();
   const [menuOpen, setMenuOpen] = useState(false);
   const [help, setHelp] = useState(false);
   useEffect(() => {
@@ -154,7 +156,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <p>Rule based. Always explainable.</p>
             <span className="engine-version">
               <span className="status-dot" />
-              Strategy v1.0 <span>Demo</span>
+              Closed candles{" "}
+              <span>{market.mode === "server" ? "MongoDB" : "Browser"}</span>
             </span>
           </div>
           <button
@@ -177,7 +180,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link className="profile" href="/sign-in/">
             <span className="profile-avatar">A</span>
             <span>
-              Admin workspace<small>Explore demo</small>
+              Admin workspace
+              <small>
+                {market.connected ? "Backend connected" : "Connection settings"}
+              </small>
             </span>
             <LogIn size={16} />
           </Link>
@@ -209,7 +215,14 @@ export function AppShell({ children }: { children: ReactNode }) {
               </kbd>
             </Link>
             <span className="demo-chip">
-              <FlaskConical size={12} /> Demo workspace
+              <Radio size={12} />{" "}
+              {market.status === "live"
+                ? "Binance live"
+                : market.status === "rest"
+                  ? "Binance snapshot"
+                  : market.status === "loading"
+                    ? "Connecting"
+                    : "Reconnecting"}
             </span>
             <span className="topbar-divider" />
             <button
@@ -239,8 +252,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             <ShieldCheck size={13} /> Signals inform. You decide.
           </span>
           <span>
-            Illustrative demo data <span className="footer-dot">·</span> No
-            orders or funds management
+            {market.mode === "server"
+              ? market.connected
+                ? "Server feed · MongoDB storage"
+                : "Backend offline · storage unavailable"
+              : "Browser feed · no server storage"}{" "}
+            <span className="footer-dot">·</span> Technical signals only
           </span>
           <span>
             Crypto Signal Agent <span className="version-pill">v0.1</span>
@@ -268,9 +285,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
             <h2 id="help-title">Your signal workspace</h2>
             <p>
-              Explore eight connected screens with a shared design system. The
-              preview uses illustrative market data, and preferences stay in
-              this browser.
+              Prices and candles come from Binance Spot. The local TypeScript
+              backend stores closed candles and signals in MongoDB. The hosted
+              browser feed has no server storage until an API origin is
+              configured.
             </p>
             <ul>
               <li>
@@ -281,7 +299,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <strong>Signal history:</strong> filter signals and export CSV.
               </li>
               <li>
-                <strong>Strategy:</strong> configure and save demo rules.
+                <strong>Strategy:</strong> save parameters to your backend.
               </li>
             </ul>
             <div className="notice">

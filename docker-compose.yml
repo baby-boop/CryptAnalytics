@@ -1,0 +1,13 @@
+services:
+  signal-agent:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3001"
+      HOST: 0.0.0.0
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?Set ADMIN_PASSWORD_HASH in .env before running the container}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env before running the container}
+    ports:
+      - "127.0.0.1:${PORT:-3001}:3001"

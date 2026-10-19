@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowUpRight,
   Bell,
@@ -18,75 +18,133 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useApp } from "@/components/app-provider";
+import { useMarket } from "@/components/market-provider";
 import { CoinIcon, PageHeading, Panel, Toggle } from "@/components/ui";
-import { coins } from "@/lib/data";
+import { coins, formatChange, formatPrice } from "@/lib/data";
+import { apiRequest } from "@/lib/api";
+import type { NotificationSettings, ServerSettings } from "@/lib/server-types";
 import "../settings-views.css";
 
-interface NotificationPreferences {
-  buy: boolean;
-  sell: boolean;
-  summary: boolean;
-  includeChart: boolean;
+interface DeliveryLog {
+  signalId: string;
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  kind: "signal" | "test";
 }
-const defaultPreferences: NotificationPreferences = {
+interface DeliveryStatus {
+  configured: boolean;
+  settings: NotificationSettings;
+  logs: DeliveryLog[];
+}
+const defaultPreferences: NotificationSettings = {
+  enabled: false,
   buy: true,
   sell: true,
-  summary: false,
   includeChart: true,
 };
 
 export default function NotificationsPage() {
-  const { sound, setSound, toast } = useApp();
+  const { sound, setSound, toast, timeframe } = useApp();
+  const { connected, mode, markets, history } = useMarket();
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [ready, setReady] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [logs, setLogs] = useState<DeliveryLog[]>([]);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(false);
+  const [testResult, setTestResult] = useState("");
   const [showSetup, setShowSetup] = useState(false);
+  const backendAvailable = connected && mode === "server";
+  const btc = markets.find((coin) => coin.symbol === "BTC") ?? coins[0];
+  const latestSignal = history.find(
+    (row) => row.symbol === "BTC" && row.timeframe === timeframe,
+  );
 
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem("signal-agent-notifications") ?? "null",
-      ) as Partial<NotificationPreferences> | null;
-      if (saved)
-        setPreferences({
-          buy: typeof saved.buy === "boolean" ? saved.buy : true,
-          sell: typeof saved.sell === "boolean" ? saved.sell : true,
-          summary: typeof saved.summary === "boolean" ? saved.summary : false,
-          includeChart:
-            typeof saved.includeChart === "boolean" ? saved.includeChart : true,
-        });
-    } catch {
-      /* Defaults are used if browser storage is unavailable. */
-    }
+  const readStatus = useCallback(async (signal?: AbortSignal) => {
+    const result = await apiRequest<DeliveryStatus>("/notifications/status", {
+      signal,
+    });
+    if (signal?.aborted) return;
+    setPreferences(result.settings);
+    setConfigured(result.configured);
+    setLogs(result.logs);
     setReady(true);
+    setError("");
   }, []);
 
   useEffect(() => {
-    if (ready) {
-      try {
-        localStorage.setItem(
-          "signal-agent-notifications",
-          JSON.stringify(preferences),
-        );
-      } catch {
-        /* Preferences remain usable during this session. */
-      }
+    if (!backendAvailable) {
+      setReady(false);
+      return;
     }
-  }, [preferences, ready]);
+    const controller = new AbortController();
+    void readStatus(controller.signal).catch((error) => {
+      if (!controller.signal.aborted)
+        setError(
+          error instanceof Error
+            ? error.message
+            : "Could not load notification settings.",
+        );
+    });
+    return () => controller.abort();
+  }, [backendAvailable, readStatus]);
 
-  function update(key: keyof NotificationPreferences, checked: boolean) {
-    setPreferences((previous) => ({ ...previous, [key]: checked }));
-    toast("Notification preference updated on this device.");
+  async function update(key: keyof NotificationSettings, checked: boolean) {
+    if (!backendAvailable || !ready || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await apiRequest<ServerSettings>("/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          notifications: { ...preferences, [key]: checked },
+        }),
+      });
+      setPreferences(result.notifications);
+      toast("Notification settings saved to MongoDB.");
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not save notification settings.",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function testNotification() {
+  async function testNotification() {
     setTesting(true);
-    setTestResult(false);
-    window.setTimeout(() => {
+    setTestResult("");
+    try {
+      const result = await apiRequest<{ sent: boolean }>(
+        "/notifications/test",
+        { method: "POST", body: "{}" },
+      );
+      setTestResult(
+        result.sent
+          ? "Test message sent to Telegram."
+          : "Telegram did not confirm delivery.",
+      );
+      void readStatus().catch((error) =>
+        setError(
+          error instanceof Error
+            ? error.message
+            : "The delivery log could not be refreshed.",
+        ),
+      );
+    } catch (error) {
+      setTestResult(
+        error instanceof Error
+          ? error.message
+          : "Telegram delivery failed. No delivery confirmation received.",
+      );
+    } finally {
       setTesting(false);
-      setTestResult(true);
-    }, 650);
+    }
   }
 
   return (
@@ -109,7 +167,14 @@ export default function NotificationsPage() {
           <div>
             <h2>Telegram notifications</h2>
             <span className="notifications-status">
-              <span /> Not configured
+              <span />{" "}
+              {!backendAvailable
+                ? "Backend unavailable"
+                : !ready
+                  ? "Checking configuration…"
+                  : configured
+                    ? "Configured"
+                    : "Not configured"}
             </span>
           </div>
           <p>Your market updates, delivered directly to Telegram.</p>
@@ -154,10 +219,11 @@ export default function NotificationsPage() {
                 <li>
                   <span>3</span>
                   <div>
-                    <strong>Connect a delivery endpoint</strong>
+                    <strong>Restart and verify delivery</strong>
                     <p>
-                      This UI demo has no Telegram backend. A server integration
-                      is required before messages can be delivered.
+                      Restart your backend after setting the environment
+                      variables, send a test notification, then enable automatic
+                      delivery below.
                     </p>
                   </div>
                 </li>
@@ -174,9 +240,44 @@ export default function NotificationsPage() {
             title="Delivery settings"
             description="Choose which moments deserve your attention."
             actions={
-              <span className="settings-small-badge">Auto-saved locally</span>
+              <span className="settings-small-badge">
+                {saving
+                  ? "Saving…"
+                  : ready
+                    ? "Saved in MongoDB"
+                    : "Backend required"}
+              </span>
             }
           >
+            {(error || !backendAvailable) && (
+              <div className="settings-info" role="alert">
+                <CircleHelp size={15} />
+                <span>
+                  {error ||
+                    "Connect your backend to load and save Telegram delivery settings."}
+                </span>
+              </div>
+            )}
+            <div className="settings-toggle-row notifications-toggle-row">
+              <span className="notifications-option-icon blue">
+                <BellRing size={18} />
+              </span>
+              <span>
+                <strong>Automatic delivery</strong>
+                <p>
+                  Send new live signals for symbols with alerts enabled in your
+                  watchlist.
+                </p>
+              </span>
+              <Toggle
+                label="Automatic Telegram delivery"
+                checked={preferences.enabled}
+                disabled={!ready || !backendAvailable || saving}
+                onChange={(checked) => {
+                  void update("enabled", checked);
+                }}
+              />
+            </div>
             <div className="settings-toggle-row notifications-toggle-row">
               <span className="notifications-option-icon green">
                 <ArrowUpRight size={18} />
@@ -188,7 +289,10 @@ export default function NotificationsPage() {
               <Toggle
                 label="Buy signal notifications"
                 checked={preferences.buy}
-                onChange={(checked) => update("buy", checked)}
+                disabled={!ready || !backendAvailable || saving}
+                onChange={(checked) => {
+                  void update("buy", checked);
+                }}
               />
             </div>
             <div className="settings-toggle-row notifications-toggle-row">
@@ -202,7 +306,10 @@ export default function NotificationsPage() {
               <Toggle
                 label="Sell signal notifications"
                 checked={preferences.sell}
-                onChange={(checked) => update("sell", checked)}
+                disabled={!ready || !backendAvailable || saving}
+                onChange={(checked) => {
+                  void update("sell", checked);
+                }}
               />
             </div>
             <div className="settings-toggle-row notifications-toggle-row">
@@ -211,12 +318,16 @@ export default function NotificationsPage() {
               </span>
               <span>
                 <strong>Daily market summary</strong>
-                <p>A daily overview of your watchlist activity.</p>
+                <p>
+                  Unavailable: a daily summary scheduler has not been
+                  configured.
+                </p>
               </span>
               <Toggle
                 label="Daily market summary"
-                checked={preferences.summary}
-                onChange={(checked) => update("summary", checked)}
+                checked={false}
+                disabled
+                onChange={() => undefined}
               />
             </div>
           </Panel>
@@ -230,12 +341,18 @@ export default function NotificationsPage() {
               </span>
               <span>
                 <strong>Include chart link</strong>
-                <p>Add a link to the symbol’s detailed analysis.</p>
+                <p>
+                  Add an analysis link when the backend PUBLIC_ORIGIN is
+                  configured.
+                </p>
               </span>
               <Toggle
                 label="Include chart link"
                 checked={preferences.includeChart}
-                onChange={(checked) => update("includeChart", checked)}
+                disabled={!ready || !backendAvailable || saving}
+                onChange={(checked) => {
+                  void update("includeChart", checked);
+                }}
               />
             </div>
             <div className="settings-toggle-row notifications-toggle-row">
@@ -244,7 +361,7 @@ export default function NotificationsPage() {
               </span>
               <span>
                 <strong>Dashboard sound</strong>
-                <p>Allow sound when a future live signal arrives.</p>
+                <p>Save your dashboard sound preference on this device.</p>
               </span>
               <Toggle
                 label="Dashboard notification sound"
@@ -263,11 +380,17 @@ export default function NotificationsPage() {
             <div className="notifications-test-row">
               <div>
                 <WifiOff size={20} />
-                <span>Backend connection required</span>
+                <span>
+                  {backendAvailable
+                    ? configured
+                      ? "Telegram is configured"
+                      : "Telegram configuration required"
+                    : "Backend connection required"}
+                </span>
               </div>
               <button
                 className="btn btn-ghost"
-                disabled={testing}
+                disabled={testing || !backendAvailable}
                 onClick={testNotification}
               >
                 <Send size={14} />
@@ -277,10 +400,59 @@ export default function NotificationsPage() {
             {testResult && (
               <div className="notifications-test-result" role="status">
                 <CircleHelp size={17} />
+                <span>{testResult}</span>
+              </div>
+            )}
+          </Panel>
+          <Panel
+            title="Delivery log"
+            description="Actual delivery attempts recorded by your backend."
+          >
+            {logs.length ? (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Created at (UTC)</th>
+                      <th>Kind</th>
+                      <th>Status</th>
+                      <th>Attempts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logs.map((log) => (
+                      <tr key={log.signalId}>
+                        <td>
+                          {new Date(log.createdAt).toLocaleString("en-GB", {
+                            timeZone: "UTC",
+                            hour12: false,
+                          })}
+                        </td>
+                        <td>{log.kind}</td>
+                        <td
+                          className={
+                            log.status === "sent"
+                              ? "positive"
+                              : log.status === "failed"
+                                ? "negative"
+                                : "muted"
+                          }
+                        >
+                          {log.status}
+                        </td>
+                        <td>{log.attempts}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="settings-info">
+                <Bell size={15} />
                 <span>
-                  No message sent. Telegram is not configured and this demo has
-                  no delivery backend. Follow the setup guide to connect your
-                  server.
+                  {ready
+                    ? "No delivery attempts recorded yet."
+                    : "Connect your backend to read the delivery log."}
                 </span>
               </div>
             )}
@@ -288,8 +460,8 @@ export default function NotificationsPage() {
           <div className="settings-local-note">
             <ShieldCheck size={17} />
             <p>
-              Preferences are saved on this device. Automatic Telegram delivery
-              becomes available after connecting a backend.
+              Delivery settings and attempt logs are stored in MongoDB. Telegram
+              credentials stay in your backend environment.
             </p>
           </div>
         </div>
@@ -313,39 +485,54 @@ export default function NotificationsPage() {
               <div className="notifications-chat-date">Today</div>
               <div className="notifications-chat-message">
                 <div className="notifications-message-title">
-                  <CoinIcon coin={coins[0]} small />
-                  <strong>New BUY signal</strong>
-                  <span className="notifications-live-label">4H</span>
+                  <CoinIcon coin={btc} small />
+                  <strong>
+                    {btc.signal
+                      ? `${btc.signal} message preview`
+                      : "Signal message preview"}
+                  </strong>
+                  <span className="notifications-live-label">
+                    {timeframe.toUpperCase()}
+                  </span>
                 </div>
                 <h3>
                   Bitcoin <span>BTC / USDT</span>
                 </h3>
                 <div className="notifications-message-price">
-                  $82,222.14 <span>+1.10%</span>
+                  {btc.price === null ? "—" : `$${formatPrice(btc.price)}`}{" "}
+                  <span>{formatChange(btc.change)}</span>
                 </div>
                 <div className="notifications-message-divider" />
-                <p className="notifications-message-intro">
-                  Your strategy conditions are aligned.
-                </p>
+                <p className="notifications-message-intro">{btc.reason}</p>
                 <div className="notifications-message-check">
-                  <Check size={14} /> Price above EMA 50
+                  <Check size={14} /> Latest recorded signal:{" "}
+                  {latestSignal?.signal ?? "—"}
                 </div>
                 <div className="notifications-message-check">
-                  <Check size={14} /> EMA 50 above EMA 200
+                  <Check size={14} /> EMA fast{" "}
+                  <span>{formatPrice(latestSignal?.emaFast)}</span>
                 </div>
                 <div className="notifications-message-check">
-                  <Check size={14} /> MACD bullish crossover
+                  <Check size={14} /> EMA slow{" "}
+                  <span>{formatPrice(latestSignal?.emaSlow)}</span>
                 </div>
                 <div className="notifications-message-check">
-                  <Check size={14} /> RSI within range <span>48.6</span>
+                  <Check size={14} /> RSI at signal{" "}
+                  <span>{latestSignal?.rsi.toFixed(1) ?? "—"}</span>
                 </div>
                 <div className="notifications-message-divider" />
                 <p className="notifications-message-note">
-                  Generated on candle close · 4h timeframe
+                  Example layout · live market values · {timeframe} timeframe
                 </p>
                 <span className="notifications-message-time">
-                  12:00 <Check size={12} />
-                  <Check size={12} />
+                  {latestSignal
+                    ? new Date(latestSignal.time).toLocaleTimeString("en-GB", {
+                        timeZone: "UTC",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        hour12: false,
+                      }) + " UTC"
+                    : "Awaiting signal"}
                 </span>
               </div>
               {preferences.includeChart && (

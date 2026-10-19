@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { AppProvider } from "@/components/app-provider";
 import { AppShell } from "@/components/app-shell";
+import { MarketProvider } from "@/components/market-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Crypto Signal Agent — Market intelligence",
   description:
-    "A focused workspace for cryptocurrency technical signals, market analysis, and notifications. Interactive demo interface.",
+    "Live Binance cryptocurrency prices, closed-candle technical signals, and historical market analysis.",
 };
 
 export default function RootLayout({
@@ -16,7 +17,7 @@ export default function RootLayout({
     <html lang="en" data-theme="dark">
       <body>
         <AppProvider>
-          <AppShell>{children}</AppShell>
+          <MarketProvider><AppShell>{children}</AppShell></MarketProvider>
         </AppProvider>
       </body>
     </html>

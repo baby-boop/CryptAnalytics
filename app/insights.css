@@ -1194,3 +1194,22 @@
     margin-right: 20px;
   }
 }
+.archive-feed-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 17px;
+  border: 1px solid var(--border, #1c2a3d);
+  border-radius: 9px;
+  background: var(--panel, #0d1727);
+  color: var(--muted, #8c9db7);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.archive-feed-note > svg { flex-shrink: 0; color: #658dff; }
+.archive-feed-note > p { margin: 0; flex: 1; }
+.archive-feed-note.has-error { border-color: #e5ba5940; }
+.archive-feed-note.has-error > svg { color: #e5ba59; }
+.signal-provenance { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 12px; font-size: 10px; overflow-wrap: anywhere; }
+.signal-source { padding: 3px 7px; border-radius: 4px; color: #85adf8; background: #4275ed16; }
+.signal-source.live { color: #23cca1; background: #23cca115; }
